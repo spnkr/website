@@ -1,5 +1,5 @@
 import React, { Component } from 'react';
-import { Table, Grid, Header, Accordion, Popup, Segment, Icon, Image, Message } from 'semantic-ui-react';
+import { Card, Table, Grid, Header, Accordion, Popup, Segment, Icon, Image, Message } from 'semantic-ui-react';
 import { isMobile } from 'react-device-detect';
 
 import CONFIG from '../components/CONFIG';
@@ -9,6 +9,222 @@ import CrewPopup from '../components/crewpopup';
 import Worker from 'worker-loader!../workers/unifiedWorker';
 import { ResponsiveLineCanvas } from '@nivo/line';
 import themes from './nivo_themes';
+
+const POSITION_POSTFIX = [
+	'th',
+	'st',
+	'nd',
+	'rd',
+	'th',
+	'th',
+	'th',
+	'th',
+	'th',
+	'th'
+];
+
+class CrewLineup {
+	constructor(voyageConfig: object, roster: object[]) {
+		this.voyageConfig = voyageConfig;
+		this.roster = roster;
+
+		this.usedCrew = [];
+	}
+
+	_voyageScore(skill: object) {
+		return Math.floor(skill.core + (skill.range_min + skill.range_max)/2);
+	}
+
+	_renderFrozenPopup(crew: object) {
+		return crew.immortal > 0 ? <Popup content={`${crew.immortal} frozen`} trigger={<Icon name="snowflake" />} /> : '';
+	}
+
+	_renderAMPopup(crew: object, trait: string) {
+		return crew.traits.includes(trait.toLowerCase())
+			? <Popup
+					content='+25 AM'
+					trigger={<img src={`${process.env.GATSBY_ASSETS_URL}atlas/icon_antimatter.png`} style={{ height: '1em' }} className='invertibleIcon' />}
+				/>
+			: '';
+	}
+
+	_renderSkillPopup(crew: object, slotSkill: string) {
+		if (this.voyageConfig.state != 'pending')
+			return '';
+
+		const { roster, _voyageScore: voyScore } = this;
+		const getTopSkill = crew => Object.entries(crew.skills)
+																			.reduce((best, e) => voyScore(e[1]) > voyScore(best[1]) ? e : best)[0];
+		const skillRankings = Object.keys(CONFIG.SKILLS).map(skill => ({
+			skill,
+			roster: roster.filter(c => Object.keys(c.skills).includes(skill))
+										.filter(c => c.skills[skill].core > 0)
+										.sort((c1, c2) => voyScore(c2.skills[skill]) - voyScore(c1.skills[skill]))
+		}));
+		const addPostfix = pos => pos > 3 && pos < 21 ? pos + 'th' : pos + POSITION_POSTFIX[pos%10];
+		const topRank = roster ?
+			skillRankings.filter(c => Object.keys(crew.skills).includes(c.skill))
+									 .filter(c => !this.usedCrew.includes(c))
+									 .reduce((best, ranking) => {
+				const rank = ranking.roster
+														.filter(c => Object.keys(c.base_skills).includes(slotSkill))
+														.findIndex(c => crew.symbol === c.symbol) + 1;
+				return rank < best.rank || (ranking.skill == slotSkill && rank <= best.rank)
+					? {skill: ranking.skill, rank} : best;
+			}, { rank: 1000 })
+			: {skill: 'None, rank: 0'};
+		const skillContent =  `Select ${topRank.rank == 1 ? 'top crew in' : addPostfix(topRank.rank) + ' crew from top'} in ${CONFIG.SKILLS[topRank.skill]}`;
+		const skillIcon = <img src={`${process.env.GATSBY_ASSETS_URL}atlas/icon_${topRank.skill}.png`} style={{ height: '1em' }} />;
+
+		this.usedCrew.push(crew);
+		return (<Popup content={skillContent} trigger={skillIcon} />);
+	}
+
+	_renderPopups(crew: object, slot, trait, skill) {
+		return [
+			this._renderFrozenPopup(crew),
+			this._renderSkillPopup(crew, skill, slot.skill),
+			this._renderAMPopup(crew, trait)
+		].map(child => <span style={{ paddingRight: '0.5em'}}>{child}</span>);
+	}
+
+	_renderSlot(crew: object[], slot: object, trait: string, skill: object) {
+		throw('Function not implemented');
+	}
+
+	_renderSlots() {
+		return Object.values(CONFIG.VOYAGE_CREW_SLOTS).map((entry, idx) => {
+			const slot = Object.values(this.voyageConfig.crew_slots).find(slot => slot.symbol == entry);
+			const { crew, name, trait, skill } = slot;
+			if (!crew.imageUrlPortrait)
+				crew.imageUrlPortrait =
+					`${crew.portrait.file.substring(1).replaceAll('/', '_')}.png`;
+
+			return this._renderSlot(crew, slot, trait, skill);
+		});
+	}
+
+	render() {
+		throw('Function not implemented');
+	}
+}
+
+const crewLinupFormats = [
+	class extends CrewLineup {
+		render() { return (<ul>{this._renderSlots()}</ul>) }
+		_renderSlot(crew: object, slot: object, trait: string, skill: object) {
+			return (<li key={slot.name}>
+				{slot.name}
+				{'  :  '}
+				<CrewPopup crew={crew} useBase={false} />
+				{'\t'}
+				{this._renderPopups(crew, slot, trait, skill)}
+			</li>);
+		}
+	},
+	class extends CrewLineup {
+		render() { return <table style={{ marginTop: '1em' }}><tbody>{this._renderSlots()}</tbody></table> }
+		_renderSlot(crew: object, slot: object, trait: string, skill: object) {
+			return <tr key={slot.name}>
+				<td>
+					{slot.name}
+				</td>
+				<td>
+					<CrewPopup crew={crew} useBase={false} />
+				</td>
+				<td style={{ textAlign: 'justify', verticalAlign: 'middle' }}>
+					{this._renderPopups(crew, slot, trait, skill)}
+				</td>
+			</tr>;
+		}
+	},
+	class extends CrewLineup {
+		render() { return <table style={{ marginTop: '1em' }}><tbody>{this._renderSlots()}</tbody></table> }
+		_renderSlot(crew: object, slot: object, trait: string, skill: object) {
+			return <tr key={slot.name}>
+					<td>
+						{slot.name}
+					</td>
+					<td>
+						<ItemDisplay
+							src={`${process.env.GATSBY_ASSETS_URL}${crew.imageUrlPortrait}`}
+							size={32}
+							maxRarity={crew.max_rarity}
+							rarity={crew.rarity}
+						/>
+					</td>
+					<td>
+						<CrewPopup crew={crew} useBase={false} />
+					</td>
+					<td style={{textAlign: 'center', verticalAlign: 'middle' }}>
+						{this._renderFrozenPopup(crew)}
+						{this._renderAMPopup(crew, trait)}
+						{this._renderSkillPopup(crew, slot.skill)}
+					</td>
+				</tr>;
+			}
+		},
+		class extends CrewLineup {
+			render() {
+				return (
+					<div style={{ marginTop: '1em' }}>
+						<Card.Group itemsPerRow={2}>
+							{this._renderSlots()}
+						</Card.Group>
+					</div>
+				);
+			}
+			_renderSlot(crew: object, slot: object, trait: string, skill: object) {
+				function renderCrewSkills(crew: any): JSX.Element {
+					let skills = [];
+					for (let skillName in CONFIG.SKILLS) {
+						let skill = crew.skills[skillName];
+						if (skill && skill.core && skill.core > 0) {
+							skills.push({
+								'skill': skillName,
+								score: Math.floor(skill.core + (skill.range_min + skill.range_max) / 2)
+							});
+						}
+					}
+					skills.sort((a, b) => b.score - a.score);
+					return (
+						<React.Fragment>
+							{skills.map(skill => (
+								<span key={skill.skill} style={{ marginRight: '1em' }}>
+									<img src={`${process.env.GATSBY_ASSETS_URL}atlas/icon_${skill.skill}.png`} style={{ height: '1em' }} /> {skill.score}
+								</span>
+							))}
+						</React.Fragment>
+					);
+				}
+
+				return <Card key={slot.name}>
+					<Card.Content>
+						<div style={{ float: 'left' }}>
+							<ItemDisplay
+								src={`${process.env.GATSBY_ASSETS_URL}${crew.imageUrlPortrait}`}
+								size={48}
+								maxRarity={crew.max_rarity}
+								rarity={crew.rarity}
+							/>
+						</div>
+						<Card.Header>
+							<img src={`${process.env.GATSBY_ASSETS_URL}atlas/icon_${skill}.png`} style={{ height: '1.5em', float: 'right' }} />
+							<CrewPopup crew={crew} useBase={false} />
+						</Card.Header>
+						<div>
+							{name}
+							{this._renderFrozenPopup(crew)}
+							{this._renderAMPopup(crew, trait)}
+							<br />
+							{renderCrewSkills(crew)}
+						</div>
+					</Card.Content>
+
+				</Card>
+		}
+	}
+];
 
 type VoyageStatsProps = {
 	voyageData: any;
@@ -25,20 +241,8 @@ type VoyageStatsState = {
 	activePanels: [];
 	currentAm: number;
 	currentDuration: number;
+	crewView: number;
 };
-
-const POSITION_POSTFIX = [
-	'th',
-	'st',
-	'nd',
-	'rd',
-	'th',
-	'th',
-	'th',
-	'th',
-	'th',
-	'th'
-];
 
 export class VoyageStats extends Component<VoyageStatsProps, VoyageStatsState> {
 	static defaultProps = {
@@ -52,7 +256,8 @@ export class VoyageStats extends Component<VoyageStatsProps, VoyageStatsState> {
 		this.state = {
 			estimate: estimate,
 			activePanels: showPanels ? showPanels : [],
-			voyageBugDetected: 	Math.floor(voyageData.voyage_duration/7200) > Math.floor(voyageData.log_index/360)
+			voyageBugDetected: 	Math.floor(voyageData.voyage_duration/7200) > Math.floor(voyageData.log_index/360),
+			crewView: 0
 		};
 
 		if (!voyageData)
@@ -120,19 +325,18 @@ export class VoyageStats extends Component<VoyageStatsProps, VoyageStatsState> {
 				const bin = Math.floor(result/binSize)*binSize+binSize/2;
 
 			  try{
-				++bins[bin].count;
+					++bins[bin].count;
 			  }
 			  catch {
-				bins[bin] = {result: bin, count: 1};
+					bins[bin] = {result: bin, count: 1};
 			  }
 			}
 
 			delete bins[NaN];
 			var refillBins = Object.values(bins);
 
-			const total = refillBins
-													.map(value => value.count)
-													.reduce((acc, value) => acc + value, 0);
+			const total = refillBins.map(value => value.count)
+															.reduce((acc, value) => acc + value, 0);
 			var aggregate = total;
 			const cumValues = value => {
 				aggregate -= value.count;
@@ -198,59 +402,15 @@ export class VoyageStats extends Component<VoyageStatsProps, VoyageStatsState> {
 	_renderCrew() {
 		const { voyageData, roster } = this.props;
 		const ship  = this.ship;
-		const voyScore = v => Math.floor(v.core + (v.range_min + v.range_max)/2);
-		const getTopSkill = crew => Object.entries(crew.skills)
-																			.reduce((best, e) => voyScore(e[1]) > voyScore(best[1]) ? e : best)[0];
-		const skillRankings = Object.keys(CONFIG.SKILLS).map(skill => ({
-			skill,
-			roster: roster.filter(c => Object.keys(c.skills).includes(skill))
-										.filter(c => c.skills[skill].core > 0)
-										.sort((c1, c2) => voyScore(c2.skills[skill]) - voyScore(c1.skills[skill]))
-		}));
-		let usedCrew = [];
+		const voyScore = skill => Math.floor(skill.core + (skill.range_min + skill.range_max)/2);
 
 		return (
 			<div>
-			  {ship && (<span>Ship : <b>{ship.name}</b></span>)}
+			  {ship && (<span style={{paddingRight: '0.5em'}}>Ship : <b>{ship.name}</b></span>)}
+				<Icon link name='eye' onClick={() => this.setState({crewView: (this.state.crewView+1)%4})} />
 				<Grid columns={isMobile ? 1 : 2}>
 					<Grid.Column>
-						<ul>
-							{Object.values(CONFIG.VOYAGE_CREW_SLOTS).map((entry, idx) => {
-								const { crew, name, trait, skill }  = Object.values(voyageData.crew_slots).find(slot => slot.symbol == entry);
-
-								const addPostfix = pos => pos > 3 && pos < 21 ? pos + 'th' : pos + POSITION_POSTFIX[pos%10];
-								const topRank = roster ?
-									skillRankings.filter(c => Object.keys(crew.skills).includes(c.skill))
-															 .filter(c => !usedCrew.includes(c))
-															 .reduce((best, ranking) => {
-										const rank = ranking.roster
-																				.filter(c => Object.keys(c.base_skills).includes(skill))
-																				.findIndex(c => crew.symbol === c.symbol) + 1;
-										return rank < best.rank || (ranking.skill == entry && rank <= best.rank)
-											? {skill: ranking.skill, rank} : best;
-									}, { rank: 1000 })
-									: {skill: 'None, rank: 0'};
-								const skillContent =  `Select ${topRank.rank == 1 ? 'top crew in' : addPostfix(topRank.rank) + ' crew from top'} in ${CONFIG.SKILLS[topRank.skill]}`;
-								const skillIcon = <img src={`${process.env.GATSBY_ASSETS_URL}atlas/icon_${topRank.skill}.png`} style={{ height: '1em' }} />;
-
-								usedCrew.push(crew);
-								if (!crew.imageUrlPortrait)
-									crew.imageUrlPortrait =
-										`${crew.portrait.file.substring(1).replaceAll('/', '_')}.png`;
-
-								return (
-									<li key={idx}>
-										{name}
-										{'  :  '}
-										<CrewPopup crew={crew} useBase={false} />
-										{'\t'}
-										{crew.immortal > 0 && <Popup content={`${crew.immortal} frozen`} trigger={<Icon name="snowflake" />} />}
-										{crew.traits.includes(trait.toLowerCase()) && <Popup content='+25 AM' trigger={<img src={`${process.env.GATSBY_ASSETS_URL}atlas/icon_antimatter.png`} style={{ height: '1em' }} className='invertibleIcon' />}/>}
-										{voyageData.state == 'pending' && <Popup content={skillContent} trigger={skillIcon} />}
-									</li>
-								);
-							})}
-						</ul>
+						{new crewLinupFormats[this.state.crewView](voyageData, roster).render()}
 					</Grid.Column>
 					<Grid.Column verticalAlign="middle">
 						<ul>
